@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Studio Tour • Citizen Science (Rooms)</title>
+
+  <!-- 360 viewer (Pannellum) -->
+  <link rel="stylesheet" href="https://cdn.pannellum.org/2.5/pannellum.css" />
+  <script src="https://cdn.pannellum.org/2.5/pannellum.js"></script>
+
+  <!-- Charts (Plotly) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.0/plotly.min.js"></script>
+
+  <style>
+    :root{
+      --bg: #0b0c10;
+      --card: rgba(255,255,255,0.08);
+      --border: rgba(255,255,255,0.16);
+      --text: rgba(255,255,255,0.92);
+      --muted: rgba(255,255,255,0.72);
+    }
+    *{ box-sizing:border-box; }
+    body{
+      margin:0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    #panorama{ width:100vw; height:100vh; }
+
+    .hint{
+      position:fixed;
+      left:12px; bottom:12px;
+      z-index:50;
+      background: var(--card);
+      border:1px solid var(--border);
+      backdrop-filter: blur(10px);
+      padding:10px 12px;
+      border-radius:14px;
+      max-width: 820px;
+    }
+    .hint .title{ font-weight:700; margin-bottom:6px; }
+    .hint .muted{ color: var(--muted); font-size:13px; line-height:1.45; }
+    .hint .row{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+    .btn{
+      border:1px solid var(--border);
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      padding:8px 10px;
+      border-radius:12px;
+      cursor:pointer;
+      font: inherit;
+    }
+    .btn:hover{ background: rgba(255,255,255,0.10); }
+
+    /* Modal */
+    .modal-backdrop{
+      position:fixed; inset:0;
+      background:rgba(0,0,0,.65);
+      display:none;
+      z-index:100;
+      padding: 18px;
+      overflow:auto;
+    }
+    .modal{
+      max-width: 1100px;
+      margin: 30px auto;
+      background:#fff;
+      color:#111;
+      border-radius:16px;
+      overflow:hidden;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+    }
+    .modal-header{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      padding: 12px 14px;
+      border-bottom:1px solid #eee;
+    }
+    .modal-header h2{ margin:0; font-size:15px; }
+    .modal-header button{
+      border:0;
+      border-radius:10px;
+      padding:8px 10px;
+      cursor:pointer;
+      background:#f2f2f2;
+    }
+    .modal-body{ padding: 12px 14px 14px; }
+
+    .controls{
+      display:grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap:10px;
+      margin-bottom:10px;
+    }
+    .control{
+      background:#fafafa;
+      border:1px solid #eee;
+      border-radius:12px;
+      padding:10px;
+    }
+    .control label{
+      display:block;
+      font-size:12px;
+      opacity:.8;
+      margin-bottom:6px;
+    }
+    .control select{
+      width:100%;
+      padding:8px 10px;
+      border-radius:10px;
+      border:1px solid #ddd;
+      background:white;
+    }
+
+    #chart{ width:100%; height:460px; }
+    #metaRow{
+      display:flex;
+      justify-content:space-between;
+      gap:10px;
+      margin-top:8px;
+      font-size:12px;
+      opacity:.8;
+      flex-wrap:wrap;
+    }
+
+    @media (max-width: 900px){
+      .controls{ grid-template-columns: 1fr; }
+      #chart{ height: 360px; }
+      .hint{ max-width: calc(100% - 24px); }
+    }
+  </style>
+</head>
+<body>
+
+  <div id="panorama"></div>
+
+  <div class="hint">
+    <div class="title">Studio Tour (Google Sheet • Room-based)</div>
+    <div class="muted">
+      Click sinks to load charts filtered by <b>Room</b> = Kitchen / Bathroom from your Google Sheet.
+      Auto-refresh: <b>every 1 minute</b>.
+    </div>
+    <div class="row">
+      <button class="btn" onclick="go('hall')">Hall</button>
+      <button class="btn" onclick="go('kitchen')">Kitchen</button>
+      <button class="btn" onclick="go('bathroom')">Bathroom</button>
+      <button class="btn" onclick="openDashboard({Room:'Kitchen'})">Open 🚰 Kitchen</button>
+      <button class="btn" onclick="openDashboard({Room:'Bathroom'})">Open 🚿 Bathroom</button>
+      <button class="btn" onclick="openDashboard({})">Open Full dataset</button>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div class="modal-backdrop" id="modalBackdrop" onclick="closeModalIfBackdrop(event)">
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <h2 id="modalTitle">Dashboard</h2>
+        <button onclick="closeModal()">Close ✕</button>
+      </div>
+      <div class="modal-body">
+
+        <div class="controls">
+          <div class="control">
+            <label>Chart type</label>
+            <select id="chartType">
+              <option value="bar">Bar (Mean)</option>
+              <option value="scatter">Scatter (All points)</option>
+              <option value="box">Box (Distribution)</option>
+            </select>
+          </div>
+
+          <div class="control">
+            <label>Y value (numeric)</label>
+            <select id="yField">
+              <option value="Total viable count">Total viable count</option>
+              <option value="Relative frequency/percentage">Relative frequency/percentage</option>
+            </select>
+          </div>
+
+          <div class="control">
+            <label>Group by (X / categories)</label>
+            <select id="groupField"></select>
+          </div>
+        </div>
+
+        <div class="row" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+          <button class="btn" style="color:#111; border-color:#ddd;" onclick="render()">Update chart</button>
+          <button class="btn" style="color:#111; border-color:#ddd;" onclick="resetControls()">Reset</button>
+        </div>
+
+        <div id="chart"></div>
+        <div id="metaRow">
+          <div id="rowCount">Rows: -</div>
+          <div id="lastUpdated">Last updated: -</div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+<script>
+  // ==========================================================
+  // 1) PUT YOUR APPS SCRIPT WEB APP URL HERE
+  // ==========================================================
+  const API_BASE_URL = "https://script.google.com/macros/s/AKfycbxdNQ_SsTx-cmHWImaxFOCBGWXuscoTOr50BIGEdpiJ5u3Wd4qKO0wQxNMPsBovELkhIg/exec"; // <-- replace
+
+  // Refresh every 1 minute
+  const REFRESH_MS = 1 * 60 * 1000;
+
+  // ==========================================================
+  // 2) YOUR 360 PHOTOS
+  // ==========================================================
+  const PANOS = {
+    hall: "./assets/panos/hall.jpg",
+    kitchen: "./assets/panos/kitchen.jpg",
+    bathroom: "./assets/panos/bathroom.jpg"
+  };
+
+  // State
+  let viewer = null;
+  let refreshTimer = null;
+  let jsonpCleanup = null;
+
+  let allHeaders = [];
+  let allRows = [];
+  let baseFilters = {}; // {Room:'Kitchen'} or {Room:'Bathroom'} from hotspot/button
+
+  // -----------------------------
+  // Modal
+  // -----------------------------
+  function openModal(){ document.getElementById("modalBackdrop").style.display = "block"; }
+  function closeModal(){
+    document.getElementById("modalBackdrop").style.display = "none";
+    stopAutoRefresh();
+  }
+  function closeModalIfBackdrop(e){ if (e.target.id === "modalBackdrop") closeModal(); }
+
+  // -----------------------------
+  // Hotspot icons
+  // -----------------------------
+  function hotspotIcon(div, emoji, title){
+    div.style.width="44px";
+    div.style.height="44px";
+    div.style.borderRadius="999px";
+    div.style.display="grid";
+    div.style.placeItems="center";
+    div.style.background="rgba(255,255,255,0.92)";
+    div.style.boxShadow="0 10px 30px rgba(0,0,0,0.25)";
+    div.style.cursor="pointer";
+    div.title=title;
+    div.innerHTML=emoji;
+    div.style.fontSize="22px";
+  }
+  function arrowIcon(div, title){ hotspotIcon(div, "➜", title); }
+
+  // -----------------------------
+  // JSONP loader
+  // API must support:
+  //   ?callback=cbName&filters=<json>
+  // Returns: {headers:[], rows:[], meta:{updatedAt,rowCount}}
+  // -----------------------------
+  function loadRowsJSONP(filtersObj) {
+    return new Promise((resolve, reject) => {
+      const cbName = "cb_" + Math.random().toString(36).slice(2);
+      const script = document.createElement("script");
+
+      window[cbName] = (data) => { cleanup(); resolve(data); };
+
+      function cleanup() {
+        if (script.parentNode) script.parentNode.removeChild(script);
+        delete window[cbName];
+      }
+      jsonpCleanup = cleanup;
+
+      script.onerror = () => { cleanup(); reject(new Error("JSONP load failed")); };
+
+      const filtersParam = encodeURIComponent(JSON.stringify(filtersObj || {}));
+      script.src = `${API_BASE_URL}?callback=${cbName}&filters=${filtersParam}`;
+      document.body.appendChild(script);
+    });
+  }
+
+  // -----------------------------
+  // Utils
+  // -----------------------------
+  function isNumber(n){ return typeof n === "number" && Number.isFinite(n); }
+
+  function setOptions(selectId, options, preferredValue) {
+    const el = document.getElementById(selectId);
+    el.innerHTML = "";
+    options.forEach(v => {
+      const opt = document.createElement("option");
+      opt.value = v;
+      opt.textContent = v;
+      el.appendChild(opt);
+    });
+    if (preferredValue && options.includes(preferredValue)) el.value = preferredValue;
+  }
+
+  function groupMean(rows, groupField, yField) {
+    const m = new Map(); // group -> {sum,count}
+    rows.forEach(r => {
+      const g = String(r[groupField] ?? "").trim();
+      const y = r[yField];
+      if (!g || !isNumber(y)) return;
+      const cur = m.get(g) || { sum:0, count:0 };
+      cur.sum += y;
+      cur.count += 1;
+      m.set(g, cur);
+    });
+
+    const labels = Array.from(m.keys()).sort((a,b)=>a.localeCompare(b));
+    const values = labels.map(k => m.get(k).sum / m.get(k).count);
+    return { labels, values };
+  }
+
+  function groupPoints(rows, groupField, yField) {
+    const byGroup = new Map(); // group -> array of y
+    rows.forEach(r => {
+      const g = String(r[groupField] ?? "").trim();
+      const y = r[yField];
+      if (!g || !isNumber(y)) return;
+      const arr = byGroup.get(g) || [];
+      arr.push(y);
+      byGroup.set(g, arr);
+    });
+    return byGroup;
+  }
+
+  // -----------------------------
+  // Dashboard open + refresh
+  // -----------------------------
+  async function openDashboard(filters) {
+    baseFilters = filters || {};
+    openModal();
+
+    const title =
+      baseFilters.Room ? `Dashboard (Room = ${baseFilters.Room})` : "Dashboard (All Rooms)";
+    document.getElementById("modalTitle").textContent = title;
+
+    await fetchAndInit();
+    startAutoRefresh();
+  }
+
+  async function fetchAndInit() {
+    const payload = await loadRowsJSONP(baseFilters);
+    if (payload.error) throw new Error(payload.error);
+
+    allHeaders = payload.headers || [];
+    allRows = payload.rows || [];
+
+    // Group-by options (everything except numeric)
+    const numeric = new Set(["Total viable count", "Relative frequency/percentage", "Age"]);
+    const groupCandidates = allHeaders.filter(h => !numeric.has(h));
+
+    // Prefer a meaningful default
+    const preferred =
+      groupCandidates.includes("Household Device") ? "Household Device" :
+      groupCandidates.includes("Sample Type") ? "Sample Type" :
+      groupCandidates.includes("Taxonomic unit") ? "Taxonomic unit" :
+      groupCandidates[0];
+
+    setOptions("groupField", groupCandidates.length ? groupCandidates : ["Household Device"], preferred);
+
+    render(payload.meta?.updatedAt);
+  }
+
+  function startAutoRefresh(){
+    stopAutoRefresh();
+    refreshTimer = setInterval(async () => {
+      try {
+        const payload = await loadRowsJSONP(baseFilters);
+        if (payload.error) return;
+        allHeaders = payload.headers || allHeaders;
+        allRows = payload.rows || allRows;
+        render(payload.meta?.updatedAt);
+      } catch (e) {
+        console.error(e);
+      }
+    }, REFRESH_MS);
+  }
+
+  function stopAutoRefresh(){
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = null;
+    if (jsonpCleanup) { jsonpCleanup(); jsonpCleanup = null; }
+  }
+
+  function resetControls(){
+    document.getElementById("chartType").value = "bar";
+    document.getElementById("yField").value = "Total viable count";
+    // keep groupField as-is (or you can reset to first option)
+    render();
+  }
+
+  // -----------------------------
+  // Render chart (Room filtered via API)
+  // -----------------------------
+  function render(updatedAtIso){
+    const chartType = document.getElementById("chartType").value;
+    const yField = document.getElementById("yField").value;
+    const groupField = document.getElementById("groupField").value;
+
+    document.getElementById("rowCount").textContent = `Rows: ${allRows.length}`;
+    document.getElementById("lastUpdated").textContent =
+      "Last updated: " + (updatedAtIso ? new Date(updatedAtIso).toLocaleString() : new Date().toLocaleString());
+
+    let traces = [];
+
+    if (chartType === "bar") {
+      const { labels, values } = groupMean(allRows, groupField, yField);
+      traces = [{
+        type: "bar",
+        x: labels,
+        y: values,
+        name: `Mean of ${yField}`
+      }];
+
+    } else if (chartType === "scatter") {
+      // plot all points (x=group category)
+      const x = [], y = [];
+      allRows.forEach(r => {
+        const g = String(r[groupField] ?? "").trim();
+        const val = r[yField];
+        if (!g || !isNumber(val)) return;
+        x.push(g);
+        y.push(val);
+      });
+      traces = [{
+        type: "scatter",
+        mode: "markers",
+        x, y,
+        name: yField
+      }];
+
+    } else if (chartType === "box") {
+      // one box per group
+      const byGroup = groupPoints(allRows, groupField, yField);
+      const groups = Array.from(byGroup.keys()).sort((a,b)=>a.localeCompare(b));
+      traces = groups.map(g => ({
+        type: "box",
+        name: g,
+        y: byGroup.get(g)
+      }));
+    }
+
+    Plotly.react("chart", traces, {
+      title: `${chartType.toUpperCase()} • Room: ${baseFilters.Room || "All"} • Group: ${groupField} • Y: ${yField}`,
+      margin: {l: 55, r: 20, t: 65, b: 75},
+      xaxis: { title: groupField, automargin:true },
+      yaxis: { title: yField, automargin:true },
+    }, { responsive:true });
+  }
+
+  // -----------------------------
+  // Navigation
+  // -----------------------------
+  function go(sceneName){
+    if (viewer) viewer.loadScene(sceneName);
+  }
+
+  // -----------------------------
+  // Pannellum scenes (same flow)
+  // -----------------------------
+  viewer = pannellum.viewer("panorama", {
+    default: {
+      firstScene: "hall",
+      autoLoad: true,
+      showControls: true,
+      sceneFadeDuration: 700
+    },
+    scenes: {
+      hall: {
+        type: "equirectangular",
+        panorama: PANOS.hall,
+        title: "Hall",
+        hfov: 100,
+        hotSpots: [
+          { pitch: -2, yaw: 30, type: "custom",
+            createTooltipFunc: (d)=>arrowIcon(d,"Go to Kitchen"),
+            clickHandlerFunc: ()=>viewer.loadScene("kitchen")
+          }
+        ]
+      },
+
+      kitchen: {
+        type: "equirectangular",
+        panorama: PANOS.kitchen,
+        title: "Kitchen",
+        hfov: 100,
+        hotSpots: [
+          { pitch: -2, yaw: -150, type: "custom",
+            createTooltipFunc: (d)=>arrowIcon(d,"Back to Hall"),
+            clickHandlerFunc: ()=>viewer.loadScene("hall")
+          },
+          { pitch: -2, yaw: 20, type: "custom",
+            createTooltipFunc: (d)=>arrowIcon(d,"Go to Bathroom"),
+            clickHandlerFunc: ()=>viewer.loadScene("bathroom")
+          },
+          { pitch: -8, yaw: 55, type: "custom",
+            createTooltipFunc: (d)=>hotspotIcon(d,"🚰","Open Kitchen (Room=Kitchen)"),
+            clickHandlerFunc: ()=>openDashboard({Room:"Kitchen"})
+          }
+        ]
+      },
+
+      bathroom: {
+        type: "equirectangular",
+        panorama: PANOS.bathroom,
+        title: "Bathroom",
+        hfov: 100,
+        hotSpots: [
+          { pitch: -2, yaw: -160, type: "custom",
+            createTooltipFunc: (d)=>arrowIcon(d,"Back to Kitchen"),
+            clickHandlerFunc: ()=>viewer.loadScene("kitchen")
+          },
+          { pitch: -8, yaw: 60, type: "custom",
+            createTooltipFunc: (d)=>hotspotIcon(d,"🚿","Open Bathroom (Room=Bathroom)"),
+            clickHandlerFunc: ()=>openDashboard({Room:"Bathroom"})
+          }
+        ]
+      }
+    }
+  });
+</script>
+</body>
+</html>
